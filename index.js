@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { Client, GatewayIntentBits, REST, Routes, Collection, EmbedBuilder } = require('discord.js');
 const config = require('./config.json');
+require('dotenv').config();
 
 const client = new Client({
     intents: [
@@ -80,7 +81,7 @@ const commands = [
     }
 ];
 
-const rest = new REST({ version: '10' }).setToken(config.discord_bot_token);
+const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_BOT_TOKEN || config.discord_bot_token);
 
 client.once('ready', async () => {
     console.log(`[Discord] Bot is ready; logged in as ${client.user.tag}.`);
@@ -245,7 +246,7 @@ client.on('guildDelete', guild => {
 });
 
 console.log('[Discord]', 'Logging in...');
-client.login(config.discord_bot_token);
+client.login(process.env.DISCORD_BOT_TOKEN || config.discord_bot_token);
 
 // Activity updater
 class StreamActivity {
