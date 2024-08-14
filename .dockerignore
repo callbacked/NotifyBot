@@ -1,6 +1,6 @@
 /.idea/
 /node_modules/
-config.json
+config-sample.json
 todo.txt
 /*.log
-.env
+/.devcontainer
