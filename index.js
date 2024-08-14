@@ -131,7 +131,7 @@ client.on('interactionCreate', async (interaction) => {
             // Update config.json
             const newConfig = {
                 ...config,
-                twitch_channels: twitchChannels.split(',').map(channel => channel.trim()),
+                twitch_channels: twitchChannels,  
                 discord_announce_channel: discordAnnounceChannel,
                 discord_mentions: parsedDiscordMentions,
                 twitch_client_id: twitchClientId,
@@ -142,7 +142,14 @@ client.on('interactionCreate', async (interaction) => {
 
             fs.writeFileSync(path.join(__dirname, 'config.json'), JSON.stringify(newConfig, null, 2));
 
-            await interaction.reply('Configuration updated successfully!');
+            // Reload config
+            Object.assign(config, newConfig);
+
+            // Trigger refresh
+            TwitchMonitor.start(); // Restart TwitchMonitor with new config
+            await syncServerList(true); // Refresh Discord channels list
+
+            await interaction.reply('Configuration updated and refreshed successfully!');
         } catch (error) {
             console.error('Error updating configuration:', error.message);
             await interaction.reply(`Failed to update configuration. ${error.message}`);
