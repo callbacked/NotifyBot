@@ -67,27 +67,27 @@ client.login(config.discord_bot_token);
 
 // Activity updater
 class StreamActivity {
-    /**
-     * Registers a channel that has come online, and updates the user activity.
-     */
+    static onlineChannels = {};
+    static discordClient = null;
+
     static setChannelOnline(stream) {
         this.onlineChannels[stream.user_name] = stream;
-
+        console.log('[StreamActivity]', `Channel online: ${stream.user_name}`);
         this.updateActivity();
     }
 
-    /**
-     * Marks a channel as having gone offline, and updates the user activity if needed.
-     */
     static setChannelOffline(stream) {
         delete this.onlineChannels[stream.user_name];
-
+        console.log('[StreamActivity]', `Channel offline: ${stream.user_name}`);
         this.updateActivity();
     }
 
-    /**
-     * Fetches the channel that went online most recently, and is still currently online.
-     */
+    static clearAllChannels() {
+        this.onlineChannels = {};
+        console.log('[StreamActivity]', 'Cleared all channels');
+        this.updateActivity();
+    }
+
     static getMostRecentStreamInfo() {
         let lastChannel = null;
         for (let channelName in this.onlineChannels) {
@@ -97,24 +97,17 @@ class StreamActivity {
         }
         return lastChannel;
     }
-
-    /**
-     * Updates the user activity on Discord.
-     * Either clears the activity if no channels are online, or sets it to "watching" if a stream is up.
-     */
     static updateActivity() {
         let streamInfo = this.getMostRecentStreamInfo();
-
         if (streamInfo) {
-            this.discordClient.user.setActivity(streamInfo.user_name, {
-                type: 'Streaming',
+            this.discordClient.user.setActivity({
+                name: streamInfo.user_name,
+                type: 1, // 1 is 'STREAMING'
                 url: `https://twitch.tv/${streamInfo.user_name.toLowerCase()}`
             });
-
-            console.log('[StreamActivity]', `Update current activity: watching ${streamInfo.user_name}.`);
+            console.log('[StreamActivity]', `Update current activity: streaming ${streamInfo.user_name}.`);
         } else {
             console.log('[StreamActivity]', 'Cleared current activity.');
-
             this.discordClient.user.setActivity(null);
         }
     }
@@ -125,11 +118,9 @@ class StreamActivity {
 
         this.updateActivity();
 
-        // Continue to update current stream activity every 5 minutes or so
         setInterval(() => this.updateActivity(), 5 * 60 * 1000);
     }
 }
-
 // ---------------------------------------------------------------------------------------------------------------------
 // Live events
 
@@ -234,8 +225,8 @@ TwitchMonitor.onChannelLiveUpdate(async (streamData) => {
 });
 
 TwitchMonitor.onChannelOffline((streamData) => {
-    // Update activity
-    StreamActivity.setChannelOffline(streamData);
+    console.log('[TwitchMonitor]', `Channel offline: ${streamData.user_name}`);
+    StreamActivity.clearAllChannels();
 });
 
 // --- Common functions ------------------------------------------------------------------------------------------------
