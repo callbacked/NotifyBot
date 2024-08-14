@@ -1,15 +1,15 @@
+const fs = require('fs');
+const path = require('path');
+const { Client, GatewayIntentBits, REST, Routes, Collection, EmbedBuilder } = require('discord.js');
 const config = require('./config.json');
-const axios = require('axios');
-const Cleverbot = require('clevertype').Cleverbot;
 
-const { Client, GatewayIntentBits } = require('discord.js');
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildPresences,
-        GatewayIntentBits.GuildMembers, 
+        GatewayIntentBits.GuildMembers,
     ]
 });
 
@@ -20,6 +20,175 @@ const DiscordChannelSync = require("./discord-channel-sync");
 const LiveEmbed = require('./live-embed');
 const MiniDb = require('./minidb');
 
+
+const commands = [
+    {
+        name: 'setup',
+        description: 'Setup your bot configuration',
+        options: [
+            {
+                type: 3, // STRING
+                name: 'twitch_channels',
+                description: 'Comma-separated list of Twitch channels',
+                required: true,
+            },
+            {
+                type: 3, // STRING
+                name: 'discord_announce_channel',
+                description: 'Discord channel for announcements',
+                required: true,
+            },
+            {
+                type: 3, // STRING
+                name: 'discord_mentions',
+                description: 'JSON string for mentions',
+                required: true,
+            },
+            {
+                type: 3, // STRING
+                name: 'twitch_client_id',
+                description: 'Twitch client ID',
+                required: true,
+            },
+            {
+                type: 3, // STRING
+                name: 'twitch_oauth_token',
+                description: 'Twitch OAuth token',
+                required: true,
+            },
+            {
+                type: 4, // INTEGER
+                name: 'twitch_check_interval_ms',
+                description: 'Twitch check interval in milliseconds',
+                required: true,
+            },
+            {
+                type: 5, // BOOLEAN
+                name: 'twitch_use_boxart',
+                description: 'Whether to use Twitch box art',
+                required: true,
+            }
+        ],
+    },
+    {
+        name: 'help',
+        description: 'Get information about available commands',
+    },
+    {
+        name: 'gettokens',
+        description: 'Get instructions on how to obtain your Twitch tokens',
+    }
+];
+
+const rest = new REST({ version: '10' }).setToken(config.discord_bot_token);
+
+client.once('ready', async () => {
+    console.log(`[Discord] Bot is ready; logged in as ${client.user.tag}.`);
+
+    // Register slash commands
+    try {
+        console.log('Started refreshing application (/) commands.');
+
+        await rest.put(Routes.applicationCommands(client.user.id), {
+            body: commands,
+        });
+
+        console.log('Successfully reloaded application (/) commands.');
+    } catch (error) {
+        console.error('Error registering commands:', error);
+    }
+
+
+    await syncServerList(true);
+
+    StreamActivity.init(client);
+
+    TwitchMonitor.start();
+});
+
+client.on('interactionCreate', async (interaction) => {
+    if (!interaction.isCommand()) return;
+
+    const { commandName, options } = interaction;
+
+    if (commandName === 'setup') {
+        try {
+            const twitchChannels = options.getString('twitch_channels');
+            const discordAnnounceChannel = options.getString('discord_announce_channel');
+            const discordMentions = options.getString('discord_mentions');
+            const twitchClientId = options.getString('twitch_client_id');
+            const twitchOauthToken = options.getString('twitch_oauth_token');
+            const twitchCheckIntervalMs = options.getInteger('twitch_check_interval_ms');
+            const twitchUseBoxart = options.getBoolean('twitch_use_boxart');
+
+            let parsedDiscordMentions;
+            try {
+                parsedDiscordMentions = JSON.parse(discordMentions);
+            } catch (error) {
+                throw new Error(`Error parsing 'discord_mentions': ${error.message}`);
+            }
+
+            // Update config.json
+            const newConfig = {
+                ...config,
+                twitch_channels: twitchChannels,  
+                discord_announce_channel: discordAnnounceChannel,
+                discord_mentions: parsedDiscordMentions,
+                twitch_client_id: twitchClientId,
+                twitch_oauth_token: twitchOauthToken,
+                twitch_check_interval_ms: twitchCheckIntervalMs,
+                twitch_use_boxart: twitchUseBoxart,
+            };
+
+            fs.writeFileSync(path.join(__dirname, 'config.json'), JSON.stringify(newConfig, null, 2));
+
+            // Reload config
+            Object.assign(config, newConfig);
+
+            // Trigger refresh
+            TwitchMonitor.start(); // Restart TwitchMonitor with new config
+            await syncServerList(true); // Refresh Discord channels list
+
+            await interaction.reply('Configuration updated and refreshed successfully!');
+        } catch (error) {
+            console.error('Error updating configuration:', error.message);
+            await interaction.reply(`Failed to update configuration. ${error.message}`);
+        }
+    } else if (commandName === 'help') {
+        const helpEmbed = new EmbedBuilder()
+            .setColor('#0099ff')
+            .setTitle('Help - Setup Command')
+            .addFields(
+                { name: '**/setup**', value: 'Setup your bot configuration.' },
+                { name: '**twitch_channels**', value: 'Comma-separated list of Twitch channels to monitor. You can add as little or as many as you want. Syntax: `channel1,channel2`' },
+                { name: '**discord_announce_channel**', value: 'The name of the Discord channel where announcements will be made (e.g., `announcements`).' },
+                { name: '**discord_mentions**', value: 'Maps a channel name to a specific role. Syntax: `{"channel":"rolename"}`.' },
+                { name: '**twitch_client_id**', value: 'Your Twitch client ID.' },
+                { name: '**twitch_oauth_token**', value: 'Your Twitch OAuth token.' },
+                { name: '**twitch_check_interval_ms**', value: 'The interval (in milliseconds) for polling a user\'s Twitch status.' },
+                { name: '**twitch_use_boxart**', value: 'Whether to use Twitch box art (true/false).' }
+            )
+            .setFooter({ text: 'Ensure that all values are correctly formatted and valid.' });
+
+
+        await interaction.reply({ embeds: [helpEmbed], ephemeral: false });
+    } else if (commandName === 'gettokens') {
+        const tokensEmbed = new EmbedBuilder()
+            .setColor('#0099ff')
+            .setTitle('How to Get Your Twitch Tokens')
+            .setDescription('Follow these steps to obtain your Twitch tokens:')
+            .addFields(
+                { name: '1. Visit the Token Generator', value: 'Go to [Twitch Token Generator](https://twitchtokengenerator.com).' },
+                { name: '2. Select Token Type', value: 'In the popup that appears, choose "I want to..." and then select "Bot Chat Token".' },
+                { name: '3. Authorize Your Account', value: 'Proceed with authorizing your Twitch account if prompted.' },
+                { name: '4. Copy Your Tokens', value: 'In the "Generated Tokens" section, copy the **ACCESS TOKEN** and paste it to `twitch_oauth_token` in your bot configuration.' },
+                { name: '5. Paste Client ID', value: 'Also, copy the **CLIENT ID** and paste it to `twitch_client_id` in your bot configuration.' }
+            )
+            .setFooter({ text: 'Make sure to keep your tokens secure and do not share them.' });
+
+        await interaction.reply({ embeds: [tokensEmbed], ephemeral: false });
+    }
+});
 // --- Startup ---------------------------------------------------------------------------------------------------------
 console.log('Timbot is starting.');
 
@@ -37,8 +206,21 @@ let syncServerList = async (logMembership) => {
         console.error('[Discord] Error syncing server list:', error);
     }
 };
+
 client.once('ready', async () => {
-    console.log('[Discord]', `Bot is ready; logged in as ${client.user.tag}.`);
+    console.log(`[Discord] Bot is ready; logged in as ${client.user.tag}.`);
+
+    try {
+        console.log('Started refreshing application (/) commands.');
+
+        await rest.put(Routes.applicationCommands(client.user.id), {
+            body: commands,
+        });
+
+        console.log('Successfully reloaded application (/) commands.');
+    } catch (error) {
+        console.error('Error registering commands:', error);
+    }
 
     // Init list of connected servers, and determine which channels we are announcing to
     await syncServerList(true);

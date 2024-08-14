@@ -15,16 +15,45 @@ class TwitchMonitor {
         this._pendingGameRefresh = false;
         this._gameData = this._gameDb.get("game-list") || { };
         this._watchingGameIds = [];
+
+        this.channelNames = [];
+        this.activeStreams = [];
+        this.streamData = {};
+
+        this.channelLiveCallbacks = [];
+        this.channelOfflineCallbacks = [];
+        this.MIN_POLL_INTERVAL_MS = 30000;
     }
 
     static start() {
+        // Check if configuration is set up correctly
+        if (config.twitch_channels === "blank" || !config.twitch_channels.trim()) {
+            console.warn('[Discord]', 'Configuration problem /!\\ Twitch channels not set up yet');
+            return;
+        }
+        
+        if (config.discord_announce_channel === "blank" || !config.discord_announce_channel.trim()) {
+            console.warn('[Discord]', 'Configuration problem /!\\ Announce channel not set up yet');
+        }
+
+        if (Object.keys(config.discord_mentions).length === 1 && config.discord_mentions.blank === "blank") {
+            console.warn('[Discord]', 'Configuration problem /!\\ Discord mentions not set up yet');
+        }
+
+        if (config.discord_bot_token === "blank" || !config.discord_bot_token.trim()) {
+            console.warn('[Discord]', 'Configuration problem /!\\ Discord bot token not set up yet');
+        }
+
+        if (config.twitch_client_id === "blank" || !config.twitch_client_id.trim()) {
+            console.warn('[Twitch]', 'Configuration problem /!\\ Twitch client ID not set up yet');
+        }
+
+        if (config.twitch_oauth_token === "blank" || !config.twitch_oauth_token.trim()) {
+            console.warn('[Twitch]', 'Configuration problem /!\\ Twitch OAuth token not set up yet');
+        }
+
         // Load channel names from config
-        this.channelNames = [];
-        config.twitch_channels.split(',').forEach((channelName) => {
-            if (channelName) {
-                this.channelNames.push(channelName.toLowerCase());
-            }
-        });
+        this.channelNames = config.twitch_channels.split(',').map(channelName => channelName.trim().toLowerCase()).filter(Boolean);
         if (!this.channelNames.length) {
             console.warn('[TwitchMonitor]', 'No channels configured');
             return;
@@ -32,11 +61,12 @@ class TwitchMonitor {
 
         // Configure polling interval
         let checkIntervalMs = parseInt(config.twitch_check_interval_ms);
-        if (isNaN(checkIntervalMs) || checkIntervalMs < TwitchMonitor.MIN_POLL_INTERVAL_MS) {
+        if (isNaN(checkIntervalMs) || checkIntervalMs < this.MIN_POLL_INTERVAL_MS) {
             // Enforce minimum poll interval to help avoid rate limits
-            checkIntervalMs = TwitchMonitor.MIN_POLL_INTERVAL_MS;
+            checkIntervalMs = this.MIN_POLL_INTERVAL_MS;
         }
-        setInterval(() => {
+        
+        this.pollingInterval = setInterval(() => {
             this.refresh("Periodic refresh");
         }, checkIntervalMs + 1000);
 
@@ -48,6 +78,14 @@ class TwitchMonitor {
         // Ready!
         console.log('[TwitchMonitor]', `Configured stream status polling for channels:`, this.channelNames.join(', '),
           `(${checkIntervalMs}ms interval)`);
+    }
+
+    static stop() {
+        if (this.pollingInterval) {
+            clearInterval(this.pollingInterval);
+            this.pollingInterval = null;
+            console.log('[TwitchMonitor]', 'Polling stopped.');
+        }
     }
 
     static refresh(reason) {
@@ -105,7 +143,7 @@ class TwitchMonitor {
 
         users.forEach((user) => {
             let prevUserData = this._userData[user.id] || { };
-            this._userData[user.id] = Object.assign({ }, prevUserData, user);
+            this._userData[user.id] = Object.assign({}, prevUserData, user);
 
             namesSeen.push(user.display_name);
         });
@@ -127,7 +165,7 @@ class TwitchMonitor {
             const gameId = game.id;
 
             let prevGameData = this._gameData[gameId] || { };
-            this._gameData[gameId] = Object.assign({ }, prevGameData, game);
+            this._gameData[gameId] = Object.assign({}, prevGameData, game);
 
             gotGameNames.push(`${game.id} → ${game.name}`);
         });
@@ -157,7 +195,7 @@ class TwitchMonitor {
             let userDataBase = this._userData[stream.user_id] || { };
             let prevStreamData = this.streamData[channelName] || { };
 
-            this.streamData[channelName] = Object.assign({ }, userDataBase, prevStreamData, stream);
+            this.streamData[channelName] = Object.assign({}, userDataBase, prevStreamData, stream);
             this.streamData[channelName].game = (stream.game_id && this._gameData[stream.game_id]) || null;
             this.streamData[channelName].user = userDataBase;
 
@@ -251,14 +289,6 @@ class TwitchMonitor {
     }
 }
 
-TwitchMonitor.activeStreams = [];
-TwitchMonitor.streamData = { };
-
-TwitchMonitor.channelLiveCallbacks = [];
-TwitchMonitor.channelOfflineCallbacks = [];
-
-TwitchMonitor.MIN_POLL_INTERVAL_MS = 30000;
+TwitchMonitor.__init();
 
 module.exports = TwitchMonitor;
-
-TwitchMonitor.__init();
