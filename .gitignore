@@ -1,6 +1,5 @@
 /.idea/
 /node_modules/
-config.json
 todo.txt
 /*.log
 .env
