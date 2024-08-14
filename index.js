@@ -78,9 +78,37 @@ const commands = [
     {
         name: 'gettokens',
         description: 'Get instructions on how to obtain your Twitch tokens',
+    },
+
+    {
+        name: 'addchannel',
+        description: 'Add a new channel ID to the announcement list',
+        options: [
+            {
+                type: 3, // STRING
+                name: 'channel_id',
+                description: 'The ID of the Discord channel to add',
+                required: true,
+            }
+        ],
+    },
+    {
+        name: 'listchannel',
+        description: 'List all announcement channel IDs',
+    },
+    {
+        name: 'deletechannel',
+        description: 'Remove a channel ID from the announcement list',
+        options: [
+            {
+                type: 3, // STRING
+                name: 'channel_id',
+                description: 'The ID of the Discord channel to remove',
+                required: true,
+            }
+        ],
     }
 ];
-
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_BOT_TOKEN || config.discord_bot_token);
 
 client.once('ready', async () => {
@@ -115,46 +143,136 @@ client.on('interactionCreate', async (interaction) => {
     if (commandName === 'setup') {
         try {
             const twitchChannels = options.getString('twitch_channels');
-            const discordAnnounceChannel = options.getString('discord_announce_channel');
+            const discordAnnounceChannels = options.getString('discord_announce_channel').split(',');
             const discordMentions = options.getString('discord_mentions');
             const twitchClientId = options.getString('twitch_client_id');
             const twitchOauthToken = options.getString('twitch_oauth_token');
             const twitchCheckIntervalMs = options.getInteger('twitch_check_interval_ms');
             const twitchUseBoxart = options.getBoolean('twitch_use_boxart');
-
+    
             let parsedDiscordMentions;
             try {
                 parsedDiscordMentions = JSON.parse(discordMentions);
             } catch (error) {
                 throw new Error(`Error parsing 'discord_mentions': ${error.message}`);
             }
-
-            // Update config.json
+    
             const newConfig = {
                 ...config,
-                twitch_channels: twitchChannels,  
-                discord_announce_channel: discordAnnounceChannel,
+                twitch_channels: twitchChannels,
+                discord_announce_channel: discordAnnounceChannels,
                 discord_mentions: parsedDiscordMentions,
                 twitch_client_id: twitchClientId,
                 twitch_oauth_token: twitchOauthToken,
                 twitch_check_interval_ms: twitchCheckIntervalMs,
                 twitch_use_boxart: twitchUseBoxart,
             };
-
+    
             fs.writeFileSync(path.join(__dirname, 'config.json'), JSON.stringify(newConfig, null, 2));
-
+    
             // Reload config
             Object.assign(config, newConfig);
-
+    
             // Trigger refresh
             TwitchMonitor.start(); // Restart TwitchMonitor with new config
             await syncServerList(true); // Refresh Discord channels list
-
+    
             await interaction.reply('Configuration updated and refreshed successfully!');
         } catch (error) {
             console.error('Error updating configuration:', error.message);
             await interaction.reply(`Failed to update configuration. ${error.message}`);
         }
+    
+    } else if (commandName === 'addchannel') {
+        try {
+            const channelId = options.getString('channel_id');
+            
+            if (!channelId) {
+                throw new Error('Channel ID is required.');
+            }
+
+            if (config.discord_announce_channel.includes(channelId)) {
+                await interaction.reply('Channel ID is already in the announcement list.');
+                return;
+            }
+
+            config.discord_announce_channel.push(channelId);
+
+            fs.writeFileSync(path.join(__dirname, 'config.json'), JSON.stringify(config, null, 2));
+
+            // Reload config
+            Object.assign(config, { discord_announce_channel: config.discord_announce_channel });
+
+            // Trigger refresh
+            await syncServerList(true); // Refresh Discord channels list
+
+            await interaction.reply('Channel ID added and configuration refreshed successfully!');
+        } catch (error) {
+            console.error('Error adding channel:', error.message);
+            await interaction.reply(`Failed to add channel. ${error.message}`);
+        }
+    
+    } else if (commandName === 'listchannel') {
+        try {
+            const guilds = client.guilds.cache;
+            let description = '';
+
+            for (const [guildId, guild] of guilds) {
+                const channels = guild.channels.cache.filter(channel => config.discord_announce_channel.includes(channel.id));
+                if (channels.size > 0) {
+                    description += `**Server:** ${guild.name}\n`;
+                    channels.forEach(channel => {
+                        description += `- **Channel(s):** ${channel.name} (ID: ${channel.id})\n`;
+                    });
+                    description += '\n';
+                }
+            }
+
+            if (description === '') {
+                description = 'No announcement channels set.';
+            }
+
+            const listEmbed = new EmbedBuilder()
+                .setColor('#0099ff')
+                .setTitle('Announcement Channels')
+                .setDescription(description);
+
+            await interaction.reply({ embeds: [listEmbed], ephemeral: true });
+        } catch (error) {
+            console.error('Error listing channels:', error.message);
+            await interaction.reply(`Failed to list channels. ${error.message}`);
+        }
+    
+    } else if (commandName === 'deletechannel') {
+        try {
+            const channelId = options.getString('channel_id');
+            
+            if (!channelId) {
+                throw new Error('Channel ID is required.');
+            }
+
+            const index = config.discord_announce_channel.indexOf(channelId);
+            if (index === -1) {
+                await interaction.reply('Channel ID is not in the announcement list.');
+                return;
+            }
+
+            config.discord_announce_channel.splice(index, 1);
+
+            fs.writeFileSync(path.join(__dirname, 'config.json'), JSON.stringify(config, null, 2));
+
+            // Reload config
+            Object.assign(config, { discord_announce_channel: config.discord_announce_channel });
+
+            // Trigger refresh
+            await syncServerList(true); // Refresh Discord channels list
+
+            await interaction.reply('Channel ID removed and configuration refreshed successfully!');
+        } catch (error) {
+            console.error('Error removing channel:', error.message);
+            await interaction.reply(`Failed to remove channel. ${error.message}`);
+        }
+    
     } else if (commandName === 'help') {
         const helpEmbed = new EmbedBuilder()
             .setColor('#0099ff')
@@ -163,31 +281,22 @@ client.on('interactionCreate', async (interaction) => {
                 { name: '**/setup**', value: 'Setup your bot configuration.' },
                 { name: '**twitch_channels**', value: 'Comma-separated list of Twitch channels to monitor. You can add as little or as many as you want. Syntax: `channel1,channel2`' },
                 { name: '**discord_announce_channel**', value: 'The name of the Discord channel where announcements will be made (e.g., `announcements`).' },
-                { name: '**discord_mentions**', value: 'Maps a channel name to a specific role. Syntax: `{"channel":"rolename"}`.' },
-                { name: '**twitch_client_id**', value: 'Your Twitch client ID.' },
-                { name: '**twitch_oauth_token**', value: 'Your Twitch OAuth token.' },
-                { name: '**twitch_check_interval_ms**', value: 'The interval (in milliseconds) for polling a user\'s Twitch status.' },
-                { name: '**twitch_use_boxart**', value: 'Whether to use Twitch box art (true/false).' }
-            )
-            .setFooter({ text: 'Ensure that all values are correctly formatted and valid.' });
+                { name: '**discord_mentions**', value: 'JSON string for Discord mentions, used for notifying users when a stream goes live.' },
+                { name: '**twitch_client_id**', value: 'Your Twitch client ID for OAuth2 authentication.' },
+                { name: '**twitch_oauth_token**', value: 'Your Twitch OAuth token for authentication.' },
+                { name: '**twitch_check_interval_ms**', value: 'Interval in milliseconds to check Twitch status.' },
+                { name: '**twitch_use_boxart**', value: 'Whether to use Twitch box art in the announcement messages.' }
+            );
 
-
-        await interaction.reply({ embeds: [helpEmbed], ephemeral: false });
+        await interaction.reply({ embeds: [helpEmbed] });
+    
     } else if (commandName === 'gettokens') {
         const tokensEmbed = new EmbedBuilder()
             .setColor('#0099ff')
-            .setTitle('How to Get Your Twitch Tokens')
-            .setDescription('Follow these steps to obtain your Twitch tokens:')
-            .addFields(
-                { name: '1. Visit the Token Generator', value: 'Go to [Twitch Token Generator](https://twitchtokengenerator.com).' },
-                { name: '2. Select Token Type', value: 'In the popup that appears, choose "I want to..." and then select "Bot Chat Token".' },
-                { name: '3. Authorize Your Account', value: 'Proceed with authorizing your Twitch account if prompted.' },
-                { name: '4. Copy Your Tokens', value: 'In the "Generated Tokens" section, copy the **ACCESS TOKEN** and paste it to `twitch_oauth_token` in your bot configuration.' },
-                { name: '5. Paste Client ID', value: 'Also, copy the **CLIENT ID** and paste it to `twitch_client_id` in your bot configuration.' }
-            )
-            .setFooter({ text: 'Make sure to keep your tokens secure and do not share them.' });
+            .setTitle('Obtaining Twitch Tokens')
+            .setDescription('To get your Twitch tokens, follow these instructions: [Twitch OAuth Documentation](https://dev.twitch.tv/docs/authentication/getting-tokens-oauth)');
 
-        await interaction.reply({ embeds: [tokensEmbed], ephemeral: false });
+        await interaction.reply({ embeds: [tokensEmbed] });
     }
 });
 // --- Startup ---------------------------------------------------------------------------------------------------------
@@ -201,12 +310,16 @@ let targetChannels = [];
 let syncServerList = async (logMembership) => {
     try {
         console.log('[Discord] Syncing server list...');
-        targetChannels = await DiscordChannelSync.getChannelList(client, config.discord_announce_channel, logMembership);
+        const channelIds = config.discord_announce_channel;
+        targetChannels = await DiscordChannelSync.getChannelList(client, channelIds, logMembership);
         console.log(`[Discord] Synced ${targetChannels.length} channels`);
+        targetChannels.forEach(channel => console.log(`Channel ID: ${channel.id}, Name: ${channel.name}`));
     } catch (error) {
         console.error('[Discord] Error syncing server list:', error);
     }
 };
+
+
 
 client.once('ready', async () => {
     console.log(`[Discord] Bot is ready; logged in as ${client.user.tag}.`);

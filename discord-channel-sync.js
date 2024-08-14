@@ -1,10 +1,10 @@
-const { Client, Channel } = require('discord.js');
+const { Client, PermissionsBitField } = require('discord.js');
 
 /**
  * Helper class for syncing Discord target channels.
  */
 class DiscordChannelSync {
-    static async getChannelList(client, channelName, verbose) {
+    static async getChannelList(client, channelIds, verbose) {
         let nextTargetChannels = [];
 
         try {
@@ -18,31 +18,41 @@ class DiscordChannelSync {
                 const fullGuild = await client.guilds.fetch(guildId);
                 const channels = await fullGuild.channels.fetch();
 
-                const targetChannel = channels.find(c => c.name === channelName && c.type === 0); // 0 is for text channels
+                if (verbose) {
+                    console.log('[Discord]', `Fetching channels for guild: ${fullGuild.name}`);
+                    console.log('[Discord]', `Channels available: ${channels.map(c => c.id).join(', ')}`);
+                }
 
-                if (!targetChannel) {
-                    if (verbose) {
-                        console.warn('[Discord]', 'Configuration problem /!\\', `Guild ${fullGuild.name} does not have a #${channelName} channel!`);
-                    }
-                } else {
-                    const permissions = targetChannel.permissionsFor(fullGuild.members.me);
+                for (const channelId of channelIds) {
+                    const targetChannel = channels.get(channelId);
 
-                    if (verbose) {
-                        console.log('[Discord]', ' --> ', `Member of server ${fullGuild.name}, target channel is #${targetChannel.name}`);
-                    }
+                    if (targetChannel) {
+                        if (targetChannel.type !== 0) {
+                            if (verbose) {
+                                console.warn('[Discord]', 'Configuration problem /!\\', `Channel ID ${channelId} in Guild ${fullGuild.name} is not a text channel.`);
+                            }
+                        } else {
+                            const permissions = targetChannel.permissionsFor(fullGuild.members.me);
 
-                    if (!permissions.has("SendMessages")) {
-                        if (verbose) {
-                            console.warn('[Discord]', 'Permission problem /!\\', `I do not have SEND_MESSAGES permission on channel #${targetChannel.name} on ${fullGuild.name}: announcement sends will fail.`);
+                            if (verbose) {
+                                console.log('[Discord]', ' --> ', `Member of server ${fullGuild.name}, target channel is #${targetChannel.name}`);
+                                console.log('[Discord]', 'Permissions:', permissions.toArray());
+                            }
+
+                            if (!permissions.has(PermissionsBitField.Flags.SendMessages)) {
+                                if (verbose) {
+                                    console.warn('[Discord]', 'Permission problem /!\\', `I do not have SEND_MESSAGES permission on channel #${targetChannel.name} on ${fullGuild.name}: announcement sends will fail.`);
+                                }
+                            } else {
+                                nextTargetChannels.push(targetChannel);
+                            }
                         }
                     }
-
-                    nextTargetChannels.push(targetChannel);
                 }
             }
 
             if (verbose) {
-                console.log('[Discord]', `Discovered ${nextTargetChannels.length} channels to announce to for ${channelName}.`);
+                console.log('[Discord]', `Discovered ${nextTargetChannels.length} channels to announce to.`);
             }
         } catch (error) {
             console.error('[Discord]', 'Error fetching channels:', error);

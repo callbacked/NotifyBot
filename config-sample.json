@@ -1,12 +1,15 @@
 {
-  "twitch_channels": "twitchchannelname",
-  "discord_announce_channel": "rolename",
+  "twitch_channels": "twitchchannel",
+  "discord_announce_channel": [
+    "CHANNEL_ID_1",
+    "CHANNEL_ID_2"
+  ],
   "discord_mentions": {
-    "twitchchanelname": "rolename"
+    "twitchname": "rolename"
   },
-  "discord_bot_token": "DISCORD_BOT_TOKEN_HERE",
-  "twitch_client_id": "TWITCH_CLIENT_ID_HERE",
-  "twitch_oauth_token": "TWITCH_ACCESS_TOKEN_HERE",
-  "twitch_check_interval_ms": 2500,
+  "discord_bot_token": "BOT_TOKEN",
+  "twitch_client_id": "blank",
+  "twitch_oauth_token": "blank",
+  "twitch_check_interval_ms": 3000,
   "twitch_use_boxart": true
 }

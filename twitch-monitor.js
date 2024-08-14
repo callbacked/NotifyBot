@@ -31,8 +31,9 @@ class TwitchMonitor {
             console.warn('[Discord]', 'Configuration problem /!\\ Twitch channels not set up yet');
             return;
         }
-        
-        if (config.discord_announce_channel === "blank" || !config.discord_announce_channel.trim()) {
+
+        const announceChannel = typeof config.discord_announce_channel === 'string' ? config.discord_announce_channel : '';
+        if (announceChannel === "blank") {
             console.warn('[Discord]', 'Configuration problem /!\\ Announce channel not set up yet');
         }
 
@@ -40,15 +41,15 @@ class TwitchMonitor {
             console.warn('[Discord]', 'Configuration problem /!\\ Discord mentions not set up yet');
         }
 
-        if (config.discord_bot_token === "blank" || !config.discord_bot_token.trim()) {
+        if (typeof config.discord_bot_token !== 'string' || config.discord_bot_token === "blank" || !config.discord_bot_token.trim()) {
             console.warn('[Discord]', 'Configuration problem /!\\ Discord bot token not set up yet');
         }
 
-        if (config.twitch_client_id === "blank" || !config.twitch_client_id.trim()) {
+        if (typeof config.twitch_client_id !== 'string' || config.twitch_client_id === "blank" || !config.twitch_client_id.trim()) {
             console.warn('[Twitch]', 'Configuration problem /!\\ Twitch client ID not set up yet');
         }
 
-        if (config.twitch_oauth_token === "blank" || !config.twitch_oauth_token.trim()) {
+        if (typeof config.twitch_oauth_token !== 'string' || config.twitch_oauth_token === "blank" || !config.twitch_oauth_token.trim()) {
             console.warn('[Twitch]', 'Configuration problem /!\\ Twitch OAuth token not set up yet');
         }
 
