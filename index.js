@@ -41,12 +41,6 @@ const commands = [
             },
             {
                 type: 3, // STRING
-                name: 'discord_mentions',
-                description: 'JSON string for mentions',
-                required: true,
-            },
-            {
-                type: 3, // STRING
                 name: 'twitch_client_id',
                 description: 'Twitch client ID',
                 required: true,
@@ -107,7 +101,25 @@ const commands = [
                 required: true,
             }
         ],
-    }
+    },
+    {
+        name: 'setservermention',
+        description: 'Set server-specific mention for a Twitch channel',
+        options: [
+            {
+                type: 3, // STRING
+                name: 'twitch_channel',
+                description: 'The Twitch channel name',
+                required: true,
+            },
+            {
+                type: 3, // STRING
+                name: 'role_name',
+                description: 'The role name to mention (or "none" for no mention)',
+                required: true,
+            }
+        ],
+    },
 ];
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_BOT_TOKEN || config.discord_bot_token);
 
@@ -144,46 +156,36 @@ client.on('interactionCreate', async (interaction) => {
         try {
             const twitchChannels = options.getString('twitch_channels');
             const discordAnnounceChannels = options.getString('discord_announce_channel').split(',');
-            const discordMentions = options.getString('discord_mentions');
             const twitchClientId = options.getString('twitch_client_id');
             const twitchOauthToken = options.getString('twitch_oauth_token');
             const twitchCheckIntervalMs = options.getInteger('twitch_check_interval_ms');
             const twitchUseBoxart = options.getBoolean('twitch_use_boxart');
-    
-            let parsedDiscordMentions;
-            try {
-                parsedDiscordMentions = JSON.parse(discordMentions);
-            } catch (error) {
-                throw new Error(`Error parsing 'discord_mentions': ${error.message}`);
-            }
-    
+
             const newConfig = {
                 ...config,
                 twitch_channels: twitchChannels,
                 discord_announce_channel: discordAnnounceChannels,
-                discord_mentions: parsedDiscordMentions,
                 twitch_client_id: twitchClientId,
                 twitch_oauth_token: twitchOauthToken,
                 twitch_check_interval_ms: twitchCheckIntervalMs,
                 twitch_use_boxart: twitchUseBoxart,
             };
-    
+
             fs.writeFileSync(path.join(__dirname, 'config.json'), JSON.stringify(newConfig, null, 2));
-    
+
             // Reload config
             Object.assign(config, newConfig);
-    
+
             // Trigger refresh
             TwitchMonitor.start(); // Restart TwitchMonitor with new config
             await syncServerList(true); // Refresh Discord channels list
-    
+
             await interaction.reply('Configuration updated and refreshed successfully!');
         } catch (error) {
             console.error('Error updating configuration:', error.message);
             await interaction.reply(`Failed to update configuration. ${error.message}`);
         }
-    
-    } else if (commandName === 'addchannel') {
+    }else if (commandName === 'addchannel') {
         try {
             const channelId = options.getString('channel_id');
             
@@ -297,6 +299,31 @@ client.on('interactionCreate', async (interaction) => {
             .setDescription('To get your Twitch tokens, follow these instructions: [Twitch OAuth Documentation](https://dev.twitch.tv/docs/authentication/getting-tokens-oauth)');
 
         await interaction.reply({ embeds: [tokensEmbed] });
+    }
+    else if (commandName === 'setservermention') {
+        try {
+            const twitchChannel = options.getString('twitch_channel');
+            const roleName = options.getString('role_name');
+
+            if (!config.discord_mentions[twitchChannel]) {
+                config.discord_mentions[twitchChannel] = {
+                    default: '',
+                    server_specific: {}
+                };
+            }
+
+            config.discord_mentions[twitchChannel].server_specific = {
+                ...config.discord_mentions[twitchChannel].server_specific,
+                [interaction.guild.id]: roleName
+            };
+
+            fs.writeFileSync(path.join(__dirname, 'config.json'), JSON.stringify(config, null, 2));
+
+            await interaction.reply(`Server-specific mention for ${twitchChannel} updated to ${roleName}.`);
+        } catch (error) {
+            console.error('Error updating server-specific mention:', error.message);
+            await interaction.reply(`Failed to update server-specific mention. ${error.message}`);
+        }
     }
 });
 // --- Startup ---------------------------------------------------------------------------------------------------------
@@ -441,12 +468,12 @@ TwitchMonitor.onChannelLiveUpdate(async (streamData) => {
 
     for (const discordChannel of targetChannels) {
         const liveMsgDiscrim = `${discordChannel.guild.id}_${discordChannel.name}_${streamData.id}`;
-
+    
         if (discordChannel) {
             try {
                 // Either send a new message, or update an old one
                 let existingMsgId = messageHistory[liveMsgDiscrim] || null;
-
+    
                 if (existingMsgId) {
                     // Fetch existing message
                     try {
@@ -455,9 +482,10 @@ TwitchMonitor.onChannelLiveUpdate(async (streamData) => {
                             content: msgFormatted,
                             embeds: [msgEmbed]
                         });
-
+    
                         // Clean up entry if no longer live
                         if (!isLive) {
+
                             delete messageHistory[liveMsgDiscrim];
                             liveMessageDb.put('history', messageHistory);
                         }
@@ -474,57 +502,74 @@ TwitchMonitor.onChannelLiveUpdate(async (streamData) => {
                     }
                 } else if (isLive) {
                     // Sending a new message
-                    let mentionMode = (config.discord_mentions && config.discord_mentions[streamData.user_name.toLowerCase()]) || null;
-
+                    let mentionMode = null;
+                    const streamerName = streamData.user_name.toLowerCase();
+    
+                    if (config.discord_mentions && config.discord_mentions[streamerName]) {
+                        const serverSpecificMentions = config.discord_mentions[streamerName].server_specific;
+                        if (serverSpecificMentions && serverSpecificMentions[discordChannel.guild.id]) {
+                            mentionMode = serverSpecificMentions[discordChannel.guild.id];
+                        } else {
+                            mentionMode = config.discord_mentions[streamerName].default;
+                        }
+                    }
+    
                     if (mentionMode) {
                         mentionMode = mentionMode.toLowerCase();
-
+    
                         if (mentionMode === "everyone" || mentionMode === "here") {
                             mentionMode = `@${mentionMode}`;
                         } else {
                             let roleData = discordChannel.guild.roles.cache.find(role => role.name.toLowerCase() === mentionMode);
-
+    
                             if (roleData) {
                                 mentionMode = `<@&${roleData.id}>`;
                             } else {
-                                console.log('[Discord]', `Cannot mention role: ${mentionMode}`, `(does not exist on server ${discordChannel.guild.name})`);
+                                console.log('[Discord]', `Cannot mention role: ${mentionMode}, (does not exist on server ${discordChannel.guild.name})`);
                                 mentionMode = null;
                             }
                         }
                     }
-
+    
                     let msgToSend = mentionMode ? `${msgFormatted} ${mentionMode}` : msgFormatted;
-
+    
                     try {
                         const message = await discordChannel.send({
                             content: msgToSend,
                             embeds: [msgEmbed]
                         });
                         console.log('[Discord]', `Sent announce msg to #${discordChannel.name} on ${discordChannel.guild.name}`);
-
+    
                         messageHistory[liveMsgDiscrim] = message.id;
                         liveMessageDb.put('history', messageHistory);
                     } catch (err) {
-                        console.log('[Discord]', `Could not send announce msg to #${discordChannel.name} on ${discordChannel.guild.name}:`, err.message);
+                        console.log('[Discord]', `Could not send announce msg to #${discordChannel.name} on ${discordChannel.guild.name}: ${err.message}`);
                     }
                 }
-
+    
                 anySent = true;
             } catch (e) {
                 console.warn('[Discord]', 'Message send problem:', e);
             }
         }
     }
-
+    
     liveMessageDb.put('history', messageHistory);
     return anySent;
 });
 
-TwitchMonitor.onChannelOffline((streamData) => {
+TwitchMonitor.onChannelOffline(async (streamData) => {
     console.log('[TwitchMonitor]', `Channel offline: ${streamData.user_name}`);
-    StreamActivity.clearAllChannels();
-});
 
+    // Refresh channel list
+    await syncServerList(false);
+
+    // Update activity
+    StreamActivity.clearAllChannels();
+     StreamActivity.setChannelOffline(streamData);
+
+
+});
 // --- Common functions ------------------------------------------------------------------------------------------------
 String.prototype.replaceAll = function(search, replacement) {
     return this.split(search).join(replacement);
