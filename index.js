@@ -457,38 +457,75 @@ TwitchMonitor.onChannelLiveUpdate(async (streamData) => {
     await syncServerList(false);
 
     // Update activity
-    StreamActivity.setChannelOnline(streamData);
+    if (isLive) {
+        StreamActivity.setChannelOnline(streamData);
+    } else {
+        StreamActivity.setChannelOffline(streamData);
+    }
 
     // Generate message
-    const msgFormatted = `${streamData.user_name} went live on Twitch!`;
+    const msgFormatted = isLive 
+        ? `${streamData.user_name} went live on Twitch!`
+        : `${streamData.user_name} was live on Twitch.`;
     const msgEmbed = LiveEmbed.createForStream(streamData);
 
     // Broadcast to all target channels
     let anySent = false;
 
     for (const discordChannel of targetChannels) {
-        const liveMsgDiscrim = `${discordChannel.guild.id}_${discordChannel.name}_${streamData.id}`;
+        const liveMsgDiscrim = `${discordChannel.guild.id}_${discordChannel.name}_${streamData.user_name.toLowerCase()}`;
     
         if (discordChannel) {
             try {
                 // Either send a new message, or update an old one
-                let existingMsgId = messageHistory[liveMsgDiscrim] || null;
-    
+                let existingMsgData = messageHistory[liveMsgDiscrim];
+                let existingMsgId = existingMsgData ? existingMsgData.id : null;
+
+                let mentionMode = null;
+                if (isLive) {  // Only include mention if the stream is live
+                    const streamerName = streamData.user_name.toLowerCase();
+
+                    if (config.discord_mentions && config.discord_mentions[streamerName]) {
+                        const serverSpecificMentions = config.discord_mentions[streamerName].server_specific;
+                        if (serverSpecificMentions && serverSpecificMentions[discordChannel.guild.id]) {
+                            mentionMode = serverSpecificMentions[discordChannel.guild.id];
+                        } else {
+                            mentionMode = config.discord_mentions[streamerName].default;
+                        }
+                    }
+
+                    if (mentionMode) {
+                        mentionMode = mentionMode.toLowerCase();
+
+                        if (mentionMode === "everyone" || mentionMode === "here") {
+                            mentionMode = `@${mentionMode}`;
+                        } else {
+                            let roleData = discordChannel.guild.roles.cache.find(role => role.name.toLowerCase() === mentionMode);
+
+                            if (roleData) {
+                                mentionMode = `<@&${roleData.id}>`;
+                            } else {
+                                console.log('[Discord]', `Cannot mention role: ${mentionMode}, (does not exist on server ${discordChannel.guild.name})`);
+                                mentionMode = null;
+                            }
+                        }
+                    }
+                }
+
+                let msgToSend = mentionMode ? `${msgFormatted} ${mentionMode}` : msgFormatted;
+
                 if (existingMsgId) {
                     // Fetch existing message
                     try {
                         const existingMsg = await discordChannel.messages.fetch(existingMsgId);
                         await existingMsg.edit({
-                            content: msgFormatted,
+                            content: msgToSend,
                             embeds: [msgEmbed]
                         });
     
-                        // Clean up entry if no longer live
-                        if (!isLive) {
-
-                            delete messageHistory[liveMsgDiscrim];
-                            liveMessageDb.put('history', messageHistory);
-                        }
+                        // Update entry if no longer live
+                        messageHistory[liveMsgDiscrim] = { id: existingMsg.id, offline: !isLive };
+                        liveMessageDb.put('history', messageHistory);
                     } catch (e) {
                         // Unable to retrieve message object for editing
                         if (e.message === "Unknown Message") {
@@ -501,38 +538,7 @@ TwitchMonitor.onChannelLiveUpdate(async (streamData) => {
                         }
                     }
                 } else if (isLive) {
-                    // Sending a new message
-                    let mentionMode = null;
-                    const streamerName = streamData.user_name.toLowerCase();
-    
-                    if (config.discord_mentions && config.discord_mentions[streamerName]) {
-                        const serverSpecificMentions = config.discord_mentions[streamerName].server_specific;
-                        if (serverSpecificMentions && serverSpecificMentions[discordChannel.guild.id]) {
-                            mentionMode = serverSpecificMentions[discordChannel.guild.id];
-                        } else {
-                            mentionMode = config.discord_mentions[streamerName].default;
-                        }
-                    }
-    
-                    if (mentionMode) {
-                        mentionMode = mentionMode.toLowerCase();
-    
-                        if (mentionMode === "everyone" || mentionMode === "here") {
-                            mentionMode = `@${mentionMode}`;
-                        } else {
-                            let roleData = discordChannel.guild.roles.cache.find(role => role.name.toLowerCase() === mentionMode);
-    
-                            if (roleData) {
-                                mentionMode = `<@&${roleData.id}>`;
-                            } else {
-                                console.log('[Discord]', `Cannot mention role: ${mentionMode}, (does not exist on server ${discordChannel.guild.name})`);
-                                mentionMode = null;
-                            }
-                        }
-                    }
-    
-                    let msgToSend = mentionMode ? `${msgFormatted} ${mentionMode}` : msgFormatted;
-    
+                    // Sending a new message only if the stream is live
                     try {
                         const message = await discordChannel.send({
                             content: msgToSend,
@@ -540,7 +546,7 @@ TwitchMonitor.onChannelLiveUpdate(async (streamData) => {
                         });
                         console.log('[Discord]', `Sent announce msg to #${discordChannel.name} on ${discordChannel.guild.name}`);
     
-                        messageHistory[liveMsgDiscrim] = message.id;
+                        messageHistory[liveMsgDiscrim] = { id: message.id, offline: false };
                         liveMessageDb.put('history', messageHistory);
                     } catch (err) {
                         console.log('[Discord]', `Could not send announce msg to #${discordChannel.name} on ${discordChannel.guild.name}: ${err.message}`);
