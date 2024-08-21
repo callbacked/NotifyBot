@@ -474,12 +474,12 @@ TwitchMonitor.onChannelLiveUpdate(async (streamData) => {
 
     for (const discordChannel of targetChannels) {
         const liveMsgDiscrim = `${discordChannel.guild.id}_${discordChannel.name}_${streamData.user_name.toLowerCase()}`;
-    
+
         if (discordChannel) {
             try {
                 // Either send a new message, or update an old one
                 let existingMsgData = messageHistory[liveMsgDiscrim];
-                let existingMsgId = existingMsgData ? existingMsgData.id : null;
+                let existingMsgId = existingMsgData && !existingMsgData.offline ? existingMsgData.id : null; // Only use the message if it's still live
 
                 let mentionMode = null;
                 if (isLive) {  // Only include mention if the stream is live
@@ -520,11 +520,11 @@ TwitchMonitor.onChannelLiveUpdate(async (streamData) => {
                         const existingMsg = await discordChannel.messages.fetch(existingMsgId);
                         await existingMsg.edit({
                             content: msgToSend,
-                            embeds: [msgEmbed]
+                            embeds: [msgEmbed] // Update the embed
                         });
-    
+
                         // Update entry if no longer live
-                        messageHistory[liveMsgDiscrim] = { id: existingMsg.id, offline: !isLive };
+                        messageHistory[liveMsgDiscrim] = { id: existingMsg.id, offline: false };
                         liveMessageDb.put('history', messageHistory);
                     } catch (e) {
                         // Unable to retrieve message object for editing
@@ -545,21 +545,21 @@ TwitchMonitor.onChannelLiveUpdate(async (streamData) => {
                             embeds: [msgEmbed]
                         });
                         console.log('[Discord]', `Sent announce msg to #${discordChannel.name} on ${discordChannel.guild.name}`);
-    
+
                         messageHistory[liveMsgDiscrim] = { id: message.id, offline: false };
                         liveMessageDb.put('history', messageHistory);
                     } catch (err) {
                         console.log('[Discord]', `Could not send announce msg to #${discordChannel.name} on ${discordChannel.guild.name}: ${err.message}`);
                     }
                 }
-    
+
                 anySent = true;
             } catch (e) {
                 console.warn('[Discord]', 'Message send problem:', e);
             }
         }
     }
-    
+
     liveMessageDb.put('history', messageHistory);
     return anySent;
 });
@@ -572,10 +572,28 @@ TwitchMonitor.onChannelOffline(async (streamData) => {
 
     // Update activity
     StreamActivity.clearAllChannels();
-     StreamActivity.setChannelOffline(streamData);
+    StreamActivity.setChannelOffline(streamData);
 
-
+    // Reset message state 
+    for (const discordChannel of targetChannels) {
+        const liveMsgDiscrim = `${discordChannel.guild.id}_${discordChannel.name}_${streamData.user_name.toLowerCase()}`;
+        if (messageHistory[liveMsgDiscrim]) {
+            // Update the message to indicate the stream is offline
+            try {
+                const existingMsg = await discordChannel.messages.fetch(messageHistory[liveMsgDiscrim].id);
+                await existingMsg.edit({
+                    content: `${streamData.user_name} was live on Twitch.`,
+                    embeds: [LiveEmbed.createForStream(streamData)] // Update the embed for offline state
+                });
+                messageHistory[liveMsgDiscrim].offline = true;
+                liveMessageDb.put('history', messageHistory);
+            } catch (e) {
+                console.warn('[Discord]', `Error updating offline message in #${discordChannel.name} on ${discordChannel.guild.name}:`, e);
+            }
+        }
+    }
 });
+
 // --- Common functions ------------------------------------------------------------------------------------------------
 String.prototype.replaceAll = function(search, replacement) {
     return this.split(search).join(replacement);
