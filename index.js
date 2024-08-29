@@ -484,7 +484,7 @@ TwitchMonitor.onChannelLiveUpdate(async (streamData) => {
                 let mentionMode = null;
                 if (isLive) {  // Only include mention if the stream is live
                     const streamerName = streamData.user_name.toLowerCase();
-
+                
                     if (config.discord_mentions && config.discord_mentions[streamerName]) {
                         const serverSpecificMentions = config.discord_mentions[streamerName].server_specific;
                         if (serverSpecificMentions && serverSpecificMentions[discordChannel.guild.id]) {
@@ -493,20 +493,22 @@ TwitchMonitor.onChannelLiveUpdate(async (streamData) => {
                             mentionMode = config.discord_mentions[streamerName].default;
                         }
                     }
-
+                
                     if (mentionMode) {
                         mentionMode = mentionMode.toLowerCase();
-
-                        if (mentionMode === "everyone" || mentionMode === "here") {
+                
+                        if (mentionMode === "none") {
+                            mentionMode = ""; 
+                        } else if (mentionMode === "everyone" || mentionMode === "here") {
                             mentionMode = `@${mentionMode}`;
                         } else {
                             let roleData = discordChannel.guild.roles.cache.find(role => role.name.toLowerCase() === mentionMode);
-
+                
                             if (roleData) {
                                 mentionMode = `<@&${roleData.id}>`;
                             } else {
                                 console.log('[Discord]', `Cannot mention role: ${mentionMode}, (does not exist on server ${discordChannel.guild.name})`);
-                                mentionMode = null;
+                                mentionMode = ""; 
                             }
                         }
                     }
