@@ -20,6 +20,7 @@ const TwitchMonitor = require("./twitch-monitor");
 const DiscordChannelSync = require("./discord-channel-sync");
 const LiveEmbed = require('./live-embed');
 const MiniDb = require('./minidb');
+const debounce = new Map();
 
 
 const commands = [
@@ -452,7 +453,16 @@ let messageHistory = liveMessageDb.get("history") || {};
 
 TwitchMonitor.onChannelLiveUpdate(async (streamData) => {
     const isLive = streamData.type === "live";
-
+    const streamerName = streamData.user_name.toLowerCase();
+    
+    // Add debounce check -- plz work i beg u :))))))))))) (the double ping bug is annoying)
+    const now = Date.now();
+    const lastNotification = debounce.get(streamerName);
+    if (lastNotification && (now - lastNotification) < 60000) { // 1 minute debounce
+        console.log(`[Discord] Debouncing notification for ${streamerName}`);
+        return false;
+    }
+    debounce.set(streamerName, now);
     // Refresh channel list
     await syncServerList(false);
 
@@ -472,97 +482,163 @@ TwitchMonitor.onChannelLiveUpdate(async (streamData) => {
     // Broadcast to all target channels
     let anySent = false;
 
-    for (const discordChannel of targetChannels) {
-        const liveMsgDiscrim = `${discordChannel.guild.id}_${discordChannel.name}_${streamData.user_name.toLowerCase()}`;
+for (const discordChannel of targetChannels) {
+    const liveMsgDiscrim = `${discordChannel.guild.id}_${discordChannel.name}_${streamData.user_name.toLowerCase()}`;
 
-        if (discordChannel) {
-            try {
-                // Either send a new message, or update an old one
-                let existingMsgData = messageHistory[liveMsgDiscrim];
-                let existingMsgId = existingMsgData && !existingMsgData.offline ? existingMsgData.id : null; // Only use the message if it's still live
+    if (discordChannel) {
+        try {
+            // Either send a new message, or update an old one
+            let existingMsgData = messageHistory[liveMsgDiscrim];
+            let existingMsgId = existingMsgData && !existingMsgData.offline ? existingMsgData.id : null; // Only use the message if it's still live
 
-                let mentionMode = null;
-                if (isLive) {  // Only include mention if the stream is live
-                    const streamerName = streamData.user_name.toLowerCase();
-                
-                    if (config.discord_mentions && config.discord_mentions[streamerName]) {
-                        const serverSpecificMentions = config.discord_mentions[streamerName].server_specific;
-                        if (serverSpecificMentions && serverSpecificMentions[discordChannel.guild.id]) {
-                            mentionMode = serverSpecificMentions[discordChannel.guild.id];
-                        } else {
-                            mentionMode = config.discord_mentions[streamerName].default;
-                        }
+            let mentionMode = null;
+            if (isLive) {  // Only include mention if the stream is live
+                const streamerName = streamData.user_name.toLowerCase();
+            
+                if (config.discord_mentions && config.discord_mentions[streamerName]) {
+                    const serverSpecificMentions = config.discord_mentions[streamerName].server_specific;
+                    if (serverSpecificMentions && serverSpecificMentions[discordChannel.guild.id]) {
+                        mentionMode = serverSpecificMentions[discordChannel.guild.id];
+                    } else {
+                        mentionMode = config.discord_mentions[streamerName].default;
                     }
-                
-                    if (mentionMode) {
-                        mentionMode = mentionMode.toLowerCase();
-                
-                        if (mentionMode === "none") {
+                }
+            
+                if (mentionMode) {
+                    mentionMode = mentionMode.toLowerCase();
+            
+                    if (mentionMode === "none") {
+                        mentionMode = ""; 
+                    } else if (mentionMode === "everyone" || mentionMode === "here") {
+                        mentionMode = `@${mentionMode}`;
+                    } else {
+                        let roleData = discordChannel.guild.roles.cache.find(role => 
+                            role.name.toLowerCase() === mentionMode
+                        );
+            
+                        if (roleData) {
+                            mentionMode = `<@&${roleData.id}>`;
+                        } else {
+                            console.log('[Discord]', 
+                                `Cannot mention role: ${mentionMode}, (does not exist on server ${discordChannel.guild.name})`
+                            );
                             mentionMode = ""; 
-                        } else if (mentionMode === "everyone" || mentionMode === "here") {
-                            mentionMode = `@${mentionMode}`;
-                        } else {
-                            let roleData = discordChannel.guild.roles.cache.find(role => role.name.toLowerCase() === mentionMode);
-                
-                            if (roleData) {
-                                mentionMode = `<@&${roleData.id}>`;
-                            } else {
-                                console.log('[Discord]', `Cannot mention role: ${mentionMode}, (does not exist on server ${discordChannel.guild.name})`);
-                                mentionMode = ""; 
-                            }
                         }
                     }
                 }
-
-                let msgToSend = mentionMode ? `${msgFormatted} ${mentionMode}` : msgFormatted;
-
-                if (existingMsgId) {
-                    // Fetch existing message
-                    try {
-                        const existingMsg = await discordChannel.messages.fetch(existingMsgId);
-                        await existingMsg.edit({
-                            content: msgToSend,
-                            embeds: [msgEmbed] // Update the embed
-                        });
-
-                        // Update entry if no longer live
-                        messageHistory[liveMsgDiscrim] = { id: existingMsg.id, offline: false };
-                        liveMessageDb.put('history', messageHistory);
-                    } catch (e) {
-                        // Unable to retrieve message object for editing
-                        if (e.message === "Unknown Message") {
-                            // Specific error: the message does not exist, most likely deleted.
-                            delete messageHistory[liveMsgDiscrim];
-                            liveMessageDb.put('history', messageHistory);
-                            // This will cause the message to be posted as new in the next update if needed.
-                        } else {
-                            console.warn('[Discord] Error editing message:', e);
-                        }
-                    }
-                } else if (isLive) {
-                    // Sending a new message only if the stream is live
-                    try {
-                        const message = await discordChannel.send({
-                            content: msgToSend,
-                            embeds: [msgEmbed]
-                        });
-                        console.log('[Discord]', `Sent announce msg to #${discordChannel.name} on ${discordChannel.guild.name}`);
-
-                        messageHistory[liveMsgDiscrim] = { id: message.id, offline: false };
-                        liveMessageDb.put('history', messageHistory);
-                    } catch (err) {
-                        console.log('[Discord]', `Could not send announce msg to #${discordChannel.name} on ${discordChannel.guild.name}: ${err.message}`);
-                    }
-                }
-
-                anySent = true;
-            } catch (e) {
-                console.warn('[Discord]', 'Message send problem:', e);
             }
+
+            let msgToSend = mentionMode ? `${msgFormatted} ${mentionMode}` : msgFormatted;
+
+            if (existingMsgId) {
+                // Update existing message
+                try {
+                    const existingMsg = await discordChannel.messages.fetch(existingMsgId);
+                    await existingMsg.edit({
+                        content: msgToSend,
+                        embeds: [msgEmbed]
+                    });
+
+                    // Update the message history
+                    messageHistory[liveMsgDiscrim] = {
+                        id: existingMsg.id,
+                        offline: false,
+                        timestamp: Date.now(),
+                        lastUpdate: Date.now()
+                    };
+                    liveMessageDb.put('history', messageHistory);
+                    
+                    anySent = true;
+                } catch (e) {
+                    if (e.message === "Unknown Message") {
+                        // Message was deleted, remove from history
+                        delete messageHistory[liveMsgDiscrim];
+                        liveMessageDb.put('history', messageHistory);
+                        existingMsgId = null; // Allow sending a new message
+                    } else {
+                        console.warn('[Discord] Error editing message:', e);
+                        continue;
+                    }
+                }
+            }
+
+            // Send new message if needed and stream is live
+            if (!existingMsgId && isLive) {
+                // Check for recent messages to prevent duplicates
+                const recentThreshold = Date.now() - (60 * 1000); // 1 minute
+                
+                if (messageHistory[liveMsgDiscrim] && 
+                    messageHistory[liveMsgDiscrim].timestamp > recentThreshold) {
+                    console.log('[Discord]', 
+                        `Skipping duplicate announcement for ${streamData.user_name} (too soon)`
+                    );
+                    continue;
+                }
+
+                // Check for rate limiting
+                const guildMsgCount = Object.keys(messageHistory).filter(key => 
+                    key.startsWith(discordChannel.guild.id) && 
+                    messageHistory[key].timestamp > recentThreshold
+                ).length;
+
+                if (guildMsgCount >= 5) { // Max 5 messages per minute per guild
+                    console.log('[Discord]', 
+                        `Rate limit reached for guild ${discordChannel.guild.name}, skipping announcement`
+                    );
+                    continue;
+                }
+
+                try {
+                    const message = await discordChannel.send({
+                        content: msgToSend,
+                        embeds: [msgEmbed]
+                    });
+                    console.log('[Discord]', 
+                        `Sent announce msg to #${discordChannel.name} on ${discordChannel.guild.name}`
+                    );
+
+                    // Store message info
+                    messageHistory[liveMsgDiscrim] = {
+                        id: message.id,
+                        offline: false,
+                        timestamp: Date.now(),
+                        lastUpdate: Date.now()
+                    };
+                    liveMessageDb.put('history', messageHistory);
+                    
+                    anySent = true;
+                } catch (err) {
+                    console.log('[Discord]', 
+                        `Could not send announce msg to #${discordChannel.name} on ${discordChannel.guild.name}: ${err.message}`
+                    );
+                    
+                    // If we got a permissions error, we should remove this channel from our list
+                    if (err.code === 50013) { // Missing Permissions
+                        const index = targetChannels.indexOf(discordChannel);
+                        if (index > -1) {
+                            targetChannels.splice(index, 1);
+                            console.log('[Discord]', 
+                                `Removed channel #${discordChannel.name} due to missing permissions`
+                            );
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('[Discord]', 'Message handling problem:', e);
         }
     }
+}
 
+    // Clean up old messages periodically
+    const cleanupThreshold = Date.now() - (24 * 60 * 60 * 1000); // 24 hours
+    for (const [key, value] of Object.entries(messageHistory)) {
+        if (value.timestamp < cleanupThreshold) {
+            delete messageHistory[key];
+        }
+    }
     liveMessageDb.put('history', messageHistory);
+
     return anySent;
 });
 
